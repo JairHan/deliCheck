@@ -56,6 +56,199 @@ export DELI_TERMINAL_ID='你的设备标识'
 
 > 安全提示：不要把真实账号信息写入 `CONFIG` 后提交。分享代码或抓包前，还应检查 HAR、日志和 Git 历史中是否残留 token、手机号、位置等敏感数据。若凭据曾被公开，应立即更换密码并撤销相关会话。
 
+## 配置字段从哪里获取
+
+手机号和原始登录密码由用户自行填写；`trust_code`、`terminal_id` 以及多组织账号使用的 `org_id` 需要从本人账号的官方得力 E+ 客户端流量中确认。不要照搬他人的字段：这些值与账号、组织、设备或登录会话有关。
+
+| 配置字段 | 获取位置 | JSON 路径 | 是否长期配置 |
+| --- | --- | --- | --- |
+| `mobile` | 本人的登录手机号 | 无需抓包 | 是 |
+| `password` | 本人的原始登录密码 | 无需抓包 | 是 |
+| `trust_code` | 可信设备登录请求体 | `trust_code` | 是，失效后需重新获取 |
+| `org_id` | 组织列表响应 | `data[].org_id` | 仅多组织账号需要 |
+| `terminal_id` | 官方 App 的打卡提交请求体 | `terminal_id` | 提交时需要 |
+| `phone_model` | 打卡提交请求体 | `phone_model` | 可选，脚本已有默认值 |
+| GPS 地点信息 | GPS 支持接口响应 | `data.gps_list[]` | 默认由脚本自动获取 |
+
+注意以下字段不能混用：
+
+- 环境变量 `DELI_PASSWORD` 应填写原始密码。抓包中的 `password` 已经过客户端编码，不要把它复制到环境变量中；脚本会自行完成编码。
+- `Authorization`、`sourceToken` 和签到服务返回的 `token` 都是临时会话凭据，不需要写入 `CONFIG`。
+- `member_id`、`user_id` 和组织成员序号会在登录过程中自动获取，不是 `DELI_ORG_ID`。
+- 单组织账号可以不设置 `DELI_ORG_ID`，脚本会自动选择唯一组织。
+
+## 抓包接口与参数
+
+脚本涉及两个服务域名：
+
+```text
+https://v2-app.delicloud.com
+https://checkin2-app.delicloud.com
+```
+
+不同客户端版本可能调整接口字段或版本号，应以本人官方 App 的实际请求为准。
+
+### 1. 可信设备登录
+
+```http
+POST https://v2-app.delicloud.com/api/v3.0/auth/app/trusted/login
+Content-Type: application/json
+client_id: eplus_app
+X-Service-Id: userauth
+```
+
+请求体结构：
+
+```json
+{
+  "trust_code": "<需要提取的 trust_code>",
+  "mobile": "<手机号>",
+  "password": "<客户端编码后的密码>"
+}
+```
+
+这里主要提取 `trust_code`。响应中的 `data.token` 和 `data.user_id` 会由脚本在每次登录时自动获取，不需要保存。
+
+### 2. 查询组织列表
+
+```http
+GET https://v2-app.delicloud.com/api/v3.0/org/list?user_id=<user_id>
+Authorization: <主 App 临时 token>
+user_id: <user_id>
+client_id: eplus_app
+X-Service-Id: organization
+```
+
+响应中需要关注：
+
+```json
+{
+  "data": [
+    {
+      "org_id": "<组织 ID>",
+      "org_name": "<组织名称>",
+      "seq_no": "<组织成员序号>"
+    }
+  ]
+}
+```
+
+如果 `data` 只有一项，无需设置 `DELI_ORG_ID`；如果存在多个组织，把目标组织的 `org_id` 配置为 `DELI_ORG_ID`。
+
+### 3. 登录综合签到服务
+
+```http
+POST https://checkin2-app.delicloud.com/api/v2.0/auth/login
+Content-Type: application/json
+client_id: eplus_app
+x-service-id: auth
+```
+
+请求体结构：
+
+```json
+{
+  "memberId": "<组织成员序号>",
+  "sourceToken": "<主 App 临时 token>",
+  "sourceId": "deli",
+  "orgId": "<组织 ID>"
+}
+```
+
+该接口用于换取综合签到服务的临时 token，并返回签到服务使用的 `member_id` 和 `org_id`。这些值由脚本自动处理，不需要手工配置。
+
+### 4. 获取 GPS 打卡规则
+
+```http
+POST https://checkin2-app.delicloud.com/ass/api/v2.0/phone/checkin/support
+Authorization: <综合签到临时 token>
+member_id: <签到成员 ID>
+org_id: <签到组织 ID>
+x-service-id: ass
+Content-Type: application/json
+```
+
+请求体为空对象。响应中的 `data.gps_list[]` 通常包含以下字段：
+
+```json
+{
+  "name": "<打卡点名称>",
+  "location": "<地址描述>",
+  "lat": "<纬度>",
+  "lgt": "<经度>",
+  "range": 200
+}
+```
+
+脚本默认自动读取这些规则，因此通常不需要手工填写 GPS 配置。
+
+### 5. 获取设备标识
+
+在官方 App 执行一次正常打卡，查找以下请求：
+
+```http
+POST https://checkin2-app.delicloud.com/ass/api/v2.1/phone/checkin/execute
+Authorization: <综合签到临时 token>
+member_id: <签到成员 ID>
+org_id: <签到组织 ID>
+x-service-id: ass
+Content-Type: application/json
+```
+
+请求体结构：
+
+```json
+{
+  "terminal_id": "<需要提取的设备标识>",
+  "gps_info": {
+    "time": "<毫秒时间戳>",
+    "sig": "<本次请求签名>",
+    "lat": "<纬度>",
+    "lgt": "<经度>",
+    "name": "<打卡点名称>",
+    "location": "<地址描述>"
+  },
+  "checkin_type": "gps",
+  "phone_model": "<设备型号>"
+}
+```
+
+只需把顶层的 `terminal_id` 保存为 `DELI_TERMINAL_ID`。`gps_info.time` 和 `gps_info.sig` 每次请求都会变化，不能复制为固定配置。
+
+## Charles / Proxyman 抓包教程
+
+以下流程仅适用于本人设备、本人账号或已明确授权的测试环境。
+
+1. 在电脑上安装并启动 Charles 或 Proxyman，确保电脑与手机连接同一局域网。
+2. 在抓包工具中查看电脑的局域网 IP 和代理端口，通常为 `8888`；以工具实际显示为准。
+3. 打开手机当前 Wi-Fi 的代理设置，选择“手动”，服务器填写电脑 IP，端口填写抓包工具端口。
+4. 按抓包工具的 iOS/Android 设备指引，在手机上安装其 CA 证书。iOS 还需要在“关于本机 → 证书信任设置”中启用完全信任。
+5. 在抓包工具中为以下域名启用 SSL Proxying/HTTPS 解密：
+
+   ```text
+   v2-app.delicloud.com
+   checkin2-app.delicloud.com
+   ```
+
+6. 完全关闭并重新打开得力 E+，使用本人账号正常登录，然后进入综合签到页面。
+7. 使用 URL 关键字依次筛选 `trusted/login`、`org/list`、`auth/login`、`checkin/support` 和 `checkin/execute`。
+8. 在请求详情的 JSON Body 中提取 `trust_code` 和 `terminal_id`；多组织账号再从 `org/list` 响应中确定 `org_id`。
+9. 配置完成后移除手机 Wi-Fi 代理，并根据需要删除或停用抓包 CA 证书。
+
+如果只能看到 CONNECT、请求失败或 App 提示网络异常，通常表示证书没有正确安装/信任，或当前客户端启用了证书绑定。Android 7 及以上版本的 App 也可能默认不信任用户安装的 CA。请优先使用抓包工具提供的官方设备教程和已授权测试设备，不要在不属于自己的设备或账号上绕过安全控制。
+
+抓取 `checkin/execute` 会伴随一次真实的官方 App 打卡。请在正常考勤时间、正确地点和符合所在组织制度的情况下操作，避免为获取参数反复提交。
+
+### HAR 保存与脱敏
+
+HAR 通常包含完整请求头、登录 token、手机号、设备标识、组织信息、定位和签到记录，应视为账号密码同等级别的敏感文件：
+
+- 不要提交到 Git、网盘公开链接或公开 issue。
+- 不要把完整 HAR 发给不可信的第三方。
+- 分享排障片段前，删除 `Authorization`、Cookie、token、手机号、坐标和设备 ID。
+- 完成提取后可删除 HAR，或保存在加密目录中。
+- 如果 HAR 曾被公开，应更换密码、重新登录以刷新会话，并撤销仍有效的设备或 token。
+
 ## 使用方法
 
 建议先依次执行只读命令，确认账号、排班和 GPS 规则均符合预期，再考虑提交。
