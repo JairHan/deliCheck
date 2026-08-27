@@ -8,6 +8,8 @@
 4. 使用固定办公点做 GPS 范围自检
 5. 支持青龙环境变量和 DELI_MODE 自动运行
 6. 真正提交时，时间取脚本当前毫秒，sig 按得力 App 算法本地计算（双重 MD5）
+7. 支持启动时在设定秒数内随机延迟，避免每次都在固定时刻执行
+8. 支持通过 QQ 邮箱 SMTP 推送本次执行日志
 
 依赖：
     pip install -r requirements.txt
@@ -29,14 +31,20 @@
 
 import base64
 import hashlib
+import importlib
+import io
 import json
 import math
 import os
 import secrets
+import smtplib
 import sys
 import time
 import uuid
+from contextlib import redirect_stdout
 from datetime import datetime
+from email.message import EmailMessage
+from email.utils import formataddr
 from pathlib import Path
 
 import requests
@@ -56,7 +64,7 @@ def load_env_file(path):
 
         key, sep, value = line.partition("=")
         key = key.strip()
-        if not sep or not key.startswith("DELI_"):
+        if not sep or not key.startswith(("DELI_", "SMTP_")):
             continue
 
         value = value.strip()
@@ -116,6 +124,7 @@ CONFIG = {
     "phone_model": "iPhone18,1",  # 伪装机型，任意
     "user_agent": "smartoffice/3.5.5 (iPhone; iOS 27.0; Scale/3.00)",
     "timeout": 15,
+    "random_delay": 3600,  # 启动后随机等待 0～该秒数；0 表示不延迟
     # 以下 5 项留空 = 自动从服务端 GPS 规则获取（规则已含 lat/lgt/name/location/range）
     "gps_name": "",  # 指定规则名；留空取第一条规则中心点
     "lat": "",  # 自定义坐标；留空用规则中心点（distance 0 必过）
@@ -136,6 +145,7 @@ ENV_MAP = {
     "DELI_TRUST_CODE": "trust_code",
     "DELI_ORG_ID": "org_id",
     "DELI_TERMINAL_ID": "terminal_id",
+    "DELI_RANDOM_DELAY": "random_delay",
 }
 
 for env_name, key in ENV_MAP.items():
@@ -153,6 +163,154 @@ SMS_SIGN_SECRET = "7lgTlgfGK1pkzsOV1tIC"
 
 class DeliError(RuntimeError):
     pass
+
+
+class TeeOutput:
+    """将控制台输出同时写入内存，供邮件正文复用。"""
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, text):
+        for stream in self.streams:
+            stream.write(text)
+        return len(text)
+
+    def flush(self):
+        for stream in self.streams:
+            stream.flush()
+
+
+def parse_bool_env(name, default=False):
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    normalized = value.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise DeliError(f"{name} 只能设置为 true 或 false")
+
+
+def smtp_endpoint(use_ssl):
+    """解析 SMTP_SERVER，兼容 smtp.qq.com 和 smtp.qq.com:465。"""
+    server = os.getenv("SMTP_SERVER", "smtp.qq.com").strip() or "smtp.qq.com"
+    port_text = os.getenv("SMTP_PORT", "").strip()
+
+    host, separator, inline_port = server.rpartition(":")
+    if separator and inline_port.isdigit():
+        server = host
+        if not port_text:
+            port_text = inline_port
+
+    try:
+        port = int(port_text or (465 if use_ssl else 587))
+    except ValueError as exc:
+        raise DeliError("SMTP 端口必须是整数") from exc
+    if not server or not 1 <= port <= 65535:
+        raise DeliError("SMTP_SERVER 或 SMTP_PORT 配置无效")
+    return server, port
+
+
+def send_email_notification(title, log_text):
+    """使用环境变量中的 SMTP 配置发送执行日志；未配置时直接跳过。"""
+    sender = os.getenv("SMTP_EMAIL", "").strip()
+    password = os.getenv("SMTP_PASSWORD", "").strip()
+    if not sender and not password:
+        return False
+    if not sender or not password:
+        raise DeliError("邮件推送需要同时配置 SMTP_EMAIL 和 SMTP_PASSWORD（授权码）")
+
+    use_ssl = parse_bool_env("SMTP_SSL", default=True)
+    server, port = smtp_endpoint(use_ssl)
+    sender_name = os.getenv("SMTP_NAME", "青龙脚本运行通知").strip()
+    recipient_text = os.getenv("SMTP_TO", sender)
+    recipients = [
+        item.strip()
+        for item in recipient_text.replace(";", ",").split(",")
+        if item.strip()
+    ]
+    if not recipients:
+        recipients = [sender]
+
+    message = EmailMessage()
+    message["From"] = formataddr((sender_name, sender))
+    message["To"] = ", ".join(recipients)
+    message["Subject"] = title
+    message.set_content(
+        f"打卡结果：{title}\n"
+        f"通知时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        "以下为本次完整执行日志：\n\n" + log_text
+    )
+
+    timeout = float(CONFIG.get("timeout", 15))
+    if use_ssl:
+        connection = smtplib.SMTP_SSL(server, port, timeout=timeout)
+    else:
+        connection = smtplib.SMTP(server, port, timeout=timeout)
+
+    with connection as smtp:
+        if not use_ssl:
+            smtp.starttls()
+        smtp.login(sender, password)
+        smtp.send_message(message, from_addr=sender, to_addrs=recipients)
+    return True
+
+
+def find_push_sender():
+    """兼容参考脚本使用的 rnl_push / notify.py 推送接口。"""
+    for module_name in ("rnl_push", "notify"):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        sender = getattr(module, "sendNotify", None) or getattr(module, "send", None)
+        if callable(sender):
+            return module_name, sender
+    return None, None
+
+
+def send_push_notification(title, log_text):
+    """优先使用青龙通知模块；不存在时使用脚本内置的 QQ SMTP。"""
+    module_name, sender = find_push_sender()
+    if sender:
+        sender(title, log_text)
+        return module_name
+    if send_email_notification(title, log_text):
+        return "内置 QQ SMTP"
+    return None
+
+
+def action_name(action):
+    """将服务端动作转换为适合手机通知标题的中文。"""
+    return {"checkin": "签到", "checkout": "签退"}.get(action, "打卡")
+
+
+def set_push_title(outcome, title):
+    if outcome is not None:
+        outcome["title"] = title
+
+
+def apply_random_delay(max_seconds):
+    """在 0～max_seconds（含）之间随机等待整数秒。"""
+    try:
+        max_seconds = int(str(max_seconds).strip() or "0")
+    except (TypeError, ValueError) as exc:
+        raise DeliError("random_delay / DELI_RANDOM_DELAY 必须是非负整数秒") from exc
+
+    if max_seconds < 0:
+        raise DeliError("random_delay / DELI_RANDOM_DELAY 不能小于 0")
+    if max_seconds == 0:
+        return 0
+
+    delay_seconds = secrets.randbelow(max_seconds + 1)
+    print(f"随机延迟      : {delay_seconds} 秒（配置范围 0～{max_seconds} 秒）")
+    expected_start = datetime.fromtimestamp(time.time() + delay_seconds)
+    print("预计执行时间  :", expected_start.strftime("%Y-%m-%d %H:%M:%S"))
+    if delay_seconds:
+        time.sleep(delay_seconds)
+    return delay_seconds
 
 
 def encode_password(password):
@@ -230,7 +388,9 @@ class Deli:
 
     def send_login_sms(self):
         """按官方客户端算法发送登录验证码。"""
-        nonce = "".join(secrets.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(6))
+        nonce = "".join(
+            secrets.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(6)
+        )
         time_ms = str(int(time.time() * 1000))
         sign_raw = (
             nonce
@@ -736,13 +896,26 @@ def print_submit_form(req):
     print("  member_id / org_id : 综合签到账号标识")
 
 
-def run(mode, expected=None, execute=False):
+def run(mode, expected=None, execute=False, outcome=None):
     deli = Deli()
+
+    if execute:
+        set_push_title(outcome, f"{action_name(expected)}失败｜得力 E+")
+    elif mode == "login":
+        set_push_title(outcome, "登录检查完成｜得力 E+")
+    elif mode == "status":
+        set_push_title(outcome, "状态查询完成｜得力 E+")
+    elif mode == "form":
+        set_push_title(outcome, "表单预览完成｜得力 E+")
+    else:
+        set_push_title(outcome, "仅检查，未提交打卡｜得力 E+")
 
     print("========== 得力 E+ 自动签到 ==========")
     print("运行时间      :", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     print("运行模式      :", mode)
     print("实际提交      :", "是" if execute else "否")
+
+    apply_random_delay(CONFIG.get("random_delay", 0))
 
     print("\n正在登录主 App...")
     deli.login_main()
@@ -770,6 +943,8 @@ def run(mode, expected=None, execute=False):
 
     print("正在查询当前动作...")
     action = deli.action()
+    if execute:
+        set_push_title(outcome, f"{action_name(action)}失败｜得力 E+")
 
     print("正在查询今日记录...")
     records = deli.records()
@@ -790,14 +965,17 @@ def run(mode, expected=None, execute=False):
         return
 
     if not shift.get("workday"):
+        set_push_title(outcome, "已跳过：今日非工作日｜得力 E+")
         print_status(deli, shift, action, records, gps)
         raise DeliError("今天不是工作日")
 
     if not shift.get("has_scheduled"):
+        set_push_title(outcome, "已跳过：今日没有排班｜得力 E+")
         print_status(deli, shift, action, records, gps)
         raise DeliError("今天没有排班")
 
     if expected and action != expected:
+        set_push_title(outcome, f"已跳过：当前应{action_name(action)}｜得力 E+")
         print_status(deli, shift, action, records, gps)
         raise DeliError(f"当前动作是 {action}，不是 {expected}")
 
@@ -819,6 +997,7 @@ def run(mode, expected=None, execute=False):
 
     print("正在提交签到...")
     result = deli.execute(proof)
+    set_push_title(outcome, f"{action_name(action)}成功｜得力 E+")
 
     print("Dry-run       : 否")
     print("提交签到      : 是")
@@ -861,12 +1040,29 @@ def parse_args():
 
 
 def main():
+    log_buffer = io.StringIO()
+    outcome = {"title": "脚本异常，未完成打卡｜得力 E+"}
+    exit_code = 0
+
+    with redirect_stdout(TeeOutput(sys.stdout, log_buffer)):
+        try:
+            mode, expected, execute = parse_args()
+            run(mode, expected, execute, outcome)
+        except (DeliError, requests.RequestException, ValueError, KeyError) as e:
+            print("失败：", e)
+            exit_code = 1
+
     try:
-        mode, expected, execute = parse_args()
-        run(mode, expected, execute)
-    except (DeliError, requests.RequestException, ValueError, KeyError) as e:
-        print("失败：", e)
-        sys.exit(1)
+        push_channel = send_push_notification(outcome["title"], log_buffer.getvalue())
+        if push_channel:
+            print(f"消息推送      : 成功（{push_channel}）")
+        else:
+            print("消息推送      : 未配置，已跳过")
+    except Exception as e:
+        print("消息推送      : 失败 -", e)
+
+    if exit_code:
+        sys.exit(exit_code)
 
 
 if __name__ == "__main__":

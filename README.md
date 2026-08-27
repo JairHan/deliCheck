@@ -15,6 +15,8 @@
 - 预览完整提交表单，不发送打卡请求
 - 支持签到、签退和按服务端状态自动提交
 - 支持通过环境变量在青龙等定时任务平台运行
+- 支持启动时在配置的秒数范围内随机延迟
+- 支持通过 QQ 邮箱推送成功或失败的完整执行日志
 
 ## 环境要求
 
@@ -42,6 +44,14 @@ python3 -m pip install -r requirements.txt
 | `DELI_TERMINAL_ID` | 可留空 | 留空时生成一次稳定 UUID 并自动保存 |
 | `DELI_ORG_ID` | 多组织账号必填 | 组织 ID；单组织账号可留空自动选择 |
 | `DELI_MODE` | 无参数运行时使用 | `dry`、`auto`、`checkin` 或 `checkout` |
+| `DELI_RANDOM_DELAY` | 否 | 每次启动随机等待 `0～N` 秒；默认 `0`，即不延迟 |
+| `SMTP_SSL` | 邮件推送时使用 | QQ 邮箱填写 `true` |
+| `SMTP_EMAIL` | 邮件推送时使用 | 完整的 QQ 邮箱地址，同时作为 SMTP 用户名 |
+| `SMTP_PASSWORD` | 邮件推送时使用 | QQ 邮箱授权码，不是 QQ 密码 |
+| `SMTP_NAME` | 否 | 发件人显示名称，默认“青龙脚本运行通知” |
+| `SMTP_SERVER` | 否 | 默认 `smtp.qq.com`，也支持 `smtp.qq.com:465` |
+| `SMTP_PORT` | 否 | 单独指定端口；SSL 默认 `465` |
+| `SMTP_TO` | 否 | 收件邮箱；默认发给 `SMTP_EMAIL`，多个地址用逗号分隔 |
 
 安装依赖后，复制配置模板并填写一次即可。脚本会自动读取与自身位于同一目录的 `.env`：
 
@@ -58,9 +68,22 @@ DELI_TRUST_CODE=''
 DELI_TERMINAL_ID=''
 DELI_ORG_ID=''
 DELI_MODE='dry'
+DELI_RANDOM_DELAY='0'
+
+SMTP_SSL='true'
+SMTP_EMAIL='你的QQ邮箱@qq.com'
+SMTP_PASSWORD='你的QQ邮箱授权码'
+SMTP_NAME='青龙脚本运行通知'
+SMTP_SERVER='smtp.qq.com:465'
 ```
 
 系统环境变量和青龙环境变量的优先级高于 `.env`。单组织账号可将 `DELI_ORG_ID` 留空；多组织账号需填写目标组织 ID。`DELI_MODE` 首次建议使用 `dry`。
+
+例如，设置 `DELI_RANDOM_DELAY='300'` 后，每次启动会先随机等待 `0～300` 秒，再进行登录、状态查询和提交。GPS 时间戳与签名仍会在真正提交前生成，不会使用延迟前的时间。
+
+脚本参考青龙常用推送方式，运行结束后优先调用可用的 `rnl_push.sendNotify` 或 `notify.sendNotify`；如果这两个模块不存在，则使用脚本内置 SMTP。只要同时设置 `SMTP_EMAIL` 和 `SMTP_PASSWORD` 就会启用 QQ 邮箱推送。脚本无论执行成功还是业务检查失败，都会尝试发送本次完整日志；邮件发送失败只会写入控制台日志，不会改变签到任务本身的成功或失败状态。`SMTP_PASSWORD` 必须使用 QQ 邮箱生成的授权码，不要填写 QQ 登录密码。
+
+手机通知标题显示真实打卡结果，例如 `签到成功｜得力 E+`、`签到失败｜得力 E+`、`签退成功｜得力 E+`。只有服务端提交接口成功返回时才显示签到或签退成功；Dry-run 显示 `仅检查，未提交打卡｜得力 E+`，非工作日、无排班或当前动作不匹配则显示具体跳过原因。因此无需打开邮件，也能从通知预览中区分真实打卡成功与脚本仅完成检查。
 
 首次运行建议执行：
 
