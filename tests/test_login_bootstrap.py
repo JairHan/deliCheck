@@ -3,6 +3,7 @@ import os
 import stat
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -47,9 +48,46 @@ class SmsBootstrapTests(unittest.TestCase):
                 "mobile": "13800138000",
                 "password": "test-password",
                 "trust_code": "",
+                "terminal_id": "",
             }
         )
         return deli
+
+    def test_terminal_id_is_generated_once_and_persisted(self):
+        deli = self.make_deli()
+        fixed_uuid = uuid.UUID("12345678-1234-5678-9abc-def012345678")
+        old_value = os.environ.get("DELI_TERMINAL_ID")
+
+        try:
+            with tempfile.TemporaryDirectory() as directory, patch.object(
+                app, "ENV_FILE", Path(directory) / ".env"
+            ), patch.object(app.uuid, "uuid4", return_value=fixed_uuid) as uuid4:
+                first, first_created = deli.ensure_terminal_id()
+                second, second_created = deli.ensure_terminal_id()
+                saved = app.ENV_FILE.read_text(encoding="utf-8")
+
+            self.assertEqual(first, "12345678-1234-5678-9ABC-DEF012345678")
+            self.assertEqual(second, first)
+            self.assertTrue(first_created)
+            self.assertFalse(second_created)
+            self.assertEqual(uuid4.call_count, 1)
+            self.assertIn(f'DELI_TERMINAL_ID="{first}"', saved)
+        finally:
+            if old_value is None:
+                os.environ.pop("DELI_TERMINAL_ID", None)
+            else:
+                os.environ["DELI_TERMINAL_ID"] = old_value
+
+    def test_explicit_terminal_id_is_never_overwritten(self):
+        deli = self.make_deli()
+        deli.cfg["terminal_id"] = "manual-terminal-id"
+
+        with patch.object(app.uuid, "uuid4") as uuid4:
+            terminal_id, created = deli.ensure_terminal_id()
+
+        self.assertEqual(terminal_id, "manual-terminal-id")
+        self.assertFalse(created)
+        uuid4.assert_not_called()
 
     def test_send_login_sms_uses_official_signature_shape(self):
         deli = self.make_deli()

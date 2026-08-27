@@ -35,6 +35,7 @@ import os
 import secrets
 import sys
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -289,6 +290,24 @@ class Deli:
     def set_main_session(self, data):
         self.main_token = data["token"]
         self.user_id = str(data["user_id"])
+
+    def ensure_terminal_id(self):
+        """确保设备标识存在；为空时生成一次 UUID 并持久化到 .env。"""
+        terminal_id = str(self.cfg.get("terminal_id") or "").strip()
+        if terminal_id:
+            return terminal_id, False
+
+        terminal_id = str(uuid.uuid4()).upper()
+        try:
+            save_env_value(ENV_FILE, "DELI_TERMINAL_ID", terminal_id)
+        except OSError as exc:
+            raise DeliError(
+                "无法保存自动生成的 terminal_id；请手动设置 DELI_TERMINAL_ID"
+            ) from exc
+
+        self.cfg["terminal_id"] = terminal_id
+        os.environ["DELI_TERMINAL_ID"] = terminal_id
+        return terminal_id, True
 
     def bootstrap_trust_code(self):
         """首次运行时发送短信、读取验证码并持久化 trust_code。"""
@@ -564,6 +583,7 @@ class Deli:
 
         form 模式打印它；execute() 用它真正提交，保证“打印的表单”与“提交的表单”完全一致。
         """
+        self.ensure_terminal_id()
         path = "/ass/api/v2.1/phone/checkin/execute"
         body = {
             "terminal_id": self.cfg["terminal_id"],
@@ -595,8 +615,7 @@ class Deli:
         }
 
     def execute(self, proof):
-        if not self.cfg["terminal_id"]:
-            raise DeliError("缺少 terminal_id")
+        self.ensure_terminal_id()
         req = self.execute_request(proof)
         return self.api(
             req["method"], req["url"], headers=req["headers"], json=req["body"]
@@ -736,6 +755,11 @@ def run(mode, expected=None, execute=False):
     print("正在登录综合签到...")
     deli.login_checkin()
     print("综合签到登录成功")
+
+    terminal_id, terminal_created = deli.ensure_terminal_id()
+    if terminal_created:
+        print("已生成 terminal_id:", mask(terminal_id))
+        print("已安全保存到      :", ENV_FILE)
 
     if mode == "login":
         print_login(deli)

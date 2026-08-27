@@ -39,7 +39,7 @@ python3 -m pip install -r requirements.txt
 | `DELI_MOBILE` | 是 | 得力 E+ 登录手机号 |
 | `DELI_PASSWORD` | 是 | 登录密码 |
 | `DELI_TRUST_CODE` | 首次可留空 | 留空时通过短信验证码获取并自动保存 |
-| `DELI_TERMINAL_ID` | 提交时必填 | 设备唯一标识 |
+| `DELI_TERMINAL_ID` | 可留空 | 留空时生成一次稳定 UUID 并自动保存 |
 | `DELI_ORG_ID` | 多组织账号必填 | 组织 ID；单组织账号可留空自动选择 |
 | `DELI_MODE` | 无参数运行时使用 | `dry`、`auto`、`checkin` 或 `checkout` |
 
@@ -55,7 +55,7 @@ cp .env.example .env
 DELI_MOBILE='你的手机号'
 DELI_PASSWORD='你的原始登录密码'
 DELI_TRUST_CODE=''
-DELI_TERMINAL_ID='你的设备标识'
+DELI_TERMINAL_ID=''
 DELI_ORG_ID=''
 DELI_MODE='dry'
 ```
@@ -69,6 +69,8 @@ python3 deli_eplus_auto_simple_v3.py login
 ```
 
 如果 `.env` 中的 `DELI_TRUST_CODE` 为空，脚本会自动发送登录短信并提示输入验证码。验证成功后，服务端返回的 `trust_code` 会写回 `.env`，文件权限会设置为 `600`；以后运行将直接使用密码和已保存的 `trust_code`，不再要求验证码。
+
+如果 `DELI_TERMINAL_ID` 为空，脚本会在首次成功登录后生成一个大写 UUID 并写回 `.env`。该值只生成一次，以后始终复用；如果用户已经配置了官方 App 的设备标识，脚本不会覆盖。
 
 非交互环境可先通过官方 App 获取验证码，再临时提供已经收到的验证码：
 
@@ -84,7 +86,7 @@ DELI_SMS_CODE='短信验证码' python3 deli_eplus_auto_simple_v3.py login
 
 ## 配置字段从哪里获取
 
-手机号和原始登录密码由用户自行填写；`trust_code` 可由脚本在首次运行时通过短信验证自动获取。`terminal_id` 仍需从本人官方得力 E+ 客户端流量中确认，多组织账号的 `org_id` 也可以在登录后根据脚本列出的组织信息填写。不要照搬他人的字段：这些值与账号、组织、设备或登录会话有关。
+手机号和原始登录密码由用户自行填写；`trust_code` 可由脚本在首次运行时通过短信验证自动获取。`terminal_id` 留空时会生成并持久化一个随机 UUID，也可以改为本人官方 App 请求中的真实设备标识。多组织账号的 `org_id` 可以在登录后根据脚本列出的组织信息填写。不要照搬他人的字段：这些值与账号、组织、设备或登录会话有关。
 
 | 配置字段 | 获取位置 | JSON 路径 | 是否长期配置 |
 | --- | --- | --- | --- |
@@ -92,7 +94,7 @@ DELI_SMS_CODE='短信验证码' python3 deli_eplus_auto_simple_v3.py login
 | `password` | 本人的原始登录密码 | 无需抓包 | 是 |
 | `trust_code` | 首次短信登录响应或可信设备登录请求体 | `data.trust_code` | 可由脚本首次自动获取 |
 | `org_id` | 组织列表响应 | `data[].org_id` | 仅多组织账号需要 |
-| `terminal_id` | 官方 App 的打卡提交请求体 | `terminal_id` | 提交时需要 |
+| `terminal_id` | 自动生成，或官方 App 打卡提交请求体 | `terminal_id` | 留空时自动生成并保存 |
 | `phone_model` | 打卡提交请求体 | `phone_model` | 可选，脚本已有默认值 |
 | GPS 地点信息 | GPS 支持接口响应 | `data.gps_list[]` | 默认由脚本自动获取 |
 
@@ -239,7 +241,7 @@ Content-Type: application/json
 }
 ```
 
-只需把顶层的 `terminal_id` 保存为 `DELI_TERMINAL_ID`。`gps_info.time` 和 `gps_info.sig` 每次请求都会变化，不能复制为固定配置。
+自动生成的 UUID 会作为 `terminal_id` 使用。如果服务端或所在组织不接受该值，可把请求体顶层的真实 `terminal_id` 保存为 `DELI_TERMINAL_ID`，它会覆盖自动生成值。`gps_info.time` 和 `gps_info.sig` 每次请求都会变化，不能复制为固定配置。
 
 ## Charles / Proxyman 抓包教程
 
