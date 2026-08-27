@@ -43,18 +43,28 @@ python3 -m pip install -r requirements.txt
 | `DELI_ORG_ID` | 多组织账号必填 | 组织 ID；单组织账号可留空自动选择 |
 | `DELI_MODE` | 无参数运行时使用 | `dry`、`auto`、`checkin` 或 `checkout` |
 
-示例：
+安装依赖后，复制配置模板并填写一次即可。脚本会自动读取与自身位于同一目录的 `.env`：
 
 ```bash
-export DELI_MOBILE='你的手机号'
-export DELI_PASSWORD='你的密码'
-export DELI_TRUST_CODE='你的 trust_code'
-export DELI_TERMINAL_ID='你的设备标识'
+cp .env.example .env
 ```
 
-也可以修改脚本顶部的 `CONFIG`。其中 `gps_name`、`lat`、`lgt`、`gps_location` 和 `gps_range` 默认留空时，会使用服务端返回的第一条 GPS 规则；如果账号属于多个组织，需要明确填写 `org_id`。
+编辑 `.env`：
 
-> 安全提示：不要把真实账号信息写入 `CONFIG` 后提交。分享代码或抓包前，还应检查 HAR、日志和 Git 历史中是否残留 token、手机号、位置等敏感数据。若凭据曾被公开，应立即更换密码并撤销相关会话。
+```dotenv
+DELI_MOBILE='你的手机号'
+DELI_PASSWORD='你的原始登录密码'
+DELI_TRUST_CODE='你的 trust_code'
+DELI_TERMINAL_ID='你的设备标识'
+DELI_ORG_ID=''
+DELI_MODE='dry'
+```
+
+系统环境变量和青龙环境变量的优先级高于 `.env`。单组织账号可将 `DELI_ORG_ID` 留空；多组织账号需填写目标组织 ID。`DELI_MODE` 首次建议使用 `dry`。
+
+`gps_name`、`lat`、`lgt`、`gps_location` 和 `gps_range` 默认留空时，会使用服务端返回的第一条 GPS 规则。如需自定义这些非敏感高级选项，可修改脚本顶部的 `CONFIG`。
+
+> `.env` 已被 `.gitignore` 排除。不要使用 `git add -f .env`，也不要把真实账号信息写回脚本或 `.env.example`。分享代码或抓包前，还应检查 HAR、日志和 Git 历史中是否残留 token、手机号、位置等敏感数据。若凭据曾被公开，应立即更换密码并撤销相关会话。
 
 ## 配置字段从哪里获取
 
@@ -338,7 +348,8 @@ dry-run / 表单预览 / 条件提交
 
 ```text
 .
-├── deli_eplus_auto_simple_v3.py  # 当前主程序
+├── .env.example                   # 不含真实值的配置模板
+├── .gitignore                     # Git 忽略规则
 ├── README.md                      # 使用说明
 ├── requirements.txt               # Python 依赖
 └── deli_eplus_auto_simple_v3.py  # 主程序

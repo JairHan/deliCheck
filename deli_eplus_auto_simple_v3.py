@@ -10,7 +10,7 @@
 6. 真正提交时，时间取脚本当前毫秒，sig 按得力 App 算法本地计算（双重 MD5）
 
 依赖：
-    pip install requests
+    pip install -r requirements.txt
 
 运行：
     python3 deli_eplus_auto_simple_v3.py login                                 # 仅登录，打印登录状态
@@ -35,8 +35,32 @@ import os
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 import requests
+
+
+def load_env_file(path):
+    """加载简单的 KEY=VALUE 配置，且不覆盖系统/青龙已有环境变量。"""
+    if not path.exists():
+        return
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+
+        key, sep, value = line.partition("=")
+        key = key.strip()
+        if not sep or not key.startswith("DELI_"):
+            continue
+
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        os.environ.setdefault(key, value)
 
 
 # ============================================================
@@ -65,7 +89,11 @@ CONFIG = {
 }
 
 
-# 青龙环境变量覆盖
+# 自动加载脚本同目录下的 .env；系统/青龙环境变量优先级更高。
+load_env_file(Path(__file__).with_name(".env"))
+
+
+# 青龙环境变量或 .env 覆盖
 ENV_MAP = {
     "DELI_MOBILE": "mobile",
     "DELI_PASSWORD": "password",
