@@ -2,7 +2,7 @@
 得力 E+ 自动签到 - 精简单文件版 v3
 
 功能：
-1. 手机号 + 密码 + trust_code 登录得力 E+
+1. 手机号 + 密码登录得力 E+；首次运行可通过短信验证码自动获取 trust_code
 2. 自动查询组织并登录综合签到
 3. 查询排班、当前 checkin/checkout、今日打卡记录
 4. 使用固定办公点做 GPS 范围自检
@@ -32,6 +32,7 @@ import hashlib
 import json
 import math
 import os
+import secrets
 import sys
 import time
 from datetime import datetime
@@ -58,9 +59,43 @@ def load_env_file(path):
             continue
 
         value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        if len(value) >= 2 and value[0] == value[-1] == '"':
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                value = value[1:-1]
+        elif len(value) >= 2 and value[0] == value[-1] == "'":
             value = value[1:-1]
         os.environ.setdefault(key, value)
+
+
+def save_env_value(path, key, value):
+    """将单个配置原子写入 .env，并将文件权限设置为仅当前用户可读写。"""
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    replacement = f"{key}={json.dumps(str(value), ensure_ascii=False)}"
+    updated = []
+    found = False
+
+    for line in lines:
+        candidate = line.strip()
+        if candidate.startswith("export "):
+            candidate = candidate[7:].strip()
+        current_key = candidate.partition("=")[0].strip()
+        if current_key == key:
+            if not found:
+                updated.append(replacement)
+                found = True
+            continue
+        updated.append(line)
+
+    if not found:
+        updated.append(replacement)
+
+    temp_path = path.with_name(path.name + ".tmp")
+    temp_path.write_text("\n".join(updated) + "\n", encoding="utf-8")
+    os.chmod(temp_path, 0o600)
+    os.replace(temp_path, path)
+    os.chmod(path, 0o600)
 
 
 # ============================================================
@@ -110,6 +145,9 @@ for env_name, key in ENV_MAP.items():
 
 MAIN_BASE = "https://v2-app.delicloud.com"
 CHECKIN_BASE = "https://checkin2-app.delicloud.com"
+ENV_FILE = Path(__file__).with_name(".env")
+SMS_CODE_TYPE_LOGIN = "3"
+SMS_SIGN_SECRET = "7lgTlgfGK1pkzsOV1tIC"
 
 
 class DeliError(RuntimeError):
@@ -170,11 +208,8 @@ class Deli:
 
     # ---------- 1. 主 App 登录 ----------
 
-    def login_main(self):
-        for key in ("mobile", "password", "trust_code"):
-            if not self.cfg[key]:
-                raise DeliError(f"缺少配置：{key}")
-
+    def trusted_password_login(self):
+        """使用已保存的 trust_code 进行常规密码登录。"""
         data = self.api(
             "POST",
             MAIN_BASE + "/api/v3.0/auth/app/trusted/login",
@@ -190,9 +225,105 @@ class Deli:
                 "password": encode_password(self.cfg["password"]),
             },
         )["data"]
+        self.set_main_session(data)
 
+    def send_login_sms(self):
+        """按官方客户端算法发送登录验证码。"""
+        nonce = "".join(secrets.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(6))
+        time_ms = str(int(time.time() * 1000))
+        sign_raw = (
+            nonce
+            + self.cfg["mobile"][::-1]
+            + SMS_CODE_TYPE_LOGIN
+            + time_ms
+            + SMS_SIGN_SECRET
+        )
+        sign = hashlib.sha256(sign_raw.encode("utf-8")).hexdigest()
+
+        self.api(
+            "POST",
+            MAIN_BASE + "/api/v3.0/auth/app/sms/send",
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": self.cfg["user_agent"],
+                "client_id": "eplus_app",
+                "X-Service-Id": "userauth",
+                "sign": sign,
+            },
+            json={
+                "code_type": SMS_CODE_TYPE_LOGIN,
+                "mobile": self.cfg["mobile"],
+                "timestamp": time_ms,
+                "nonce": nonce,
+            },
+        )
+
+    def sms_login_and_create_trust(self, verify_code):
+        """用短信验证码登录，并请求服务端创建新的 trust_code。"""
+        data = self.api(
+            "POST",
+            MAIN_BASE + "/api/v2.0/auth/loginMobileWithVerifyCode",
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": self.cfg["user_agent"],
+                "client_id": "eplus_app",
+                "X-Service-Id": "userauth",
+            },
+            json={
+                "mobile": self.cfg["mobile"],
+                "verify_code": verify_code,
+                "need_trust_code": True,
+                "trust_client": "deliCheck-Python",
+            },
+        )["data"]
+
+        trust_code = str(data.get("trust_code") or "").strip()
+        if not trust_code:
+            raise DeliError("短信登录成功，但响应中没有 trust_code")
+
+        self.cfg["trust_code"] = trust_code
+        os.environ["DELI_TRUST_CODE"] = trust_code
+        save_env_value(ENV_FILE, "DELI_TRUST_CODE", trust_code)
+        self.set_main_session(data)
+
+    def set_main_session(self, data):
         self.main_token = data["token"]
         self.user_id = str(data["user_id"])
+
+    def bootstrap_trust_code(self):
+        """首次运行时发送短信、读取验证码并持久化 trust_code。"""
+        print("未检测到 trust_code，开始首次可信设备验证。")
+        verify_code = os.getenv("DELI_SMS_CODE", "").strip()
+        if not verify_code:
+            if not sys.stdin.isatty():
+                raise DeliError(
+                    "当前环境无法交互输入验证码；请在终端运行 login，"
+                    "或使用官方 App 获取验证码后临时设置 DELI_SMS_CODE"
+                )
+            self.send_login_sms()
+            print("验证码已发送至：", mask(self.cfg["mobile"]))
+            try:
+                verify_code = input("请输入短信验证码：").strip()
+            except (EOFError, KeyboardInterrupt):
+                raise DeliError("未输入短信验证码")
+        else:
+            print("使用 DELI_SMS_CODE 中的临时验证码，不再重复发送短信。")
+
+        if not verify_code:
+            raise DeliError("短信验证码不能为空")
+
+        self.sms_login_and_create_trust(verify_code)
+        print("trust_code 已安全保存到：", ENV_FILE)
+
+    def login_main(self):
+        for key in ("mobile", "password"):
+            if not self.cfg[key]:
+                raise DeliError(f"缺少配置：{key}")
+
+        if self.cfg["trust_code"]:
+            self.trusted_password_login()
+        else:
+            self.bootstrap_trust_code()
 
     # ---------- 2. 查询组织 ----------
 

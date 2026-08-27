@@ -6,7 +6,7 @@
 
 ## 当前能力
 
-- 使用手机号、密码和 `trust_code` 登录得力 E+
+- 首次通过短信验证码获取并保存 `trust_code`，后续使用手机号和密码登录
 - 自动获取组织信息，支持多组织时指定 `org_id`
 - 登录综合签到服务
 - 查询今日排班、当前应执行动作和今日打卡记录
@@ -38,7 +38,7 @@ python3 -m pip install -r requirements.txt
 | --- | --- | --- |
 | `DELI_MOBILE` | 是 | 得力 E+ 登录手机号 |
 | `DELI_PASSWORD` | 是 | 登录密码 |
-| `DELI_TRUST_CODE` | 是 | 可信设备登录所需的 `trust_code` |
+| `DELI_TRUST_CODE` | 首次可留空 | 留空时通过短信验证码获取并自动保存 |
 | `DELI_TERMINAL_ID` | 提交时必填 | 设备唯一标识 |
 | `DELI_ORG_ID` | 多组织账号必填 | 组织 ID；单组织账号可留空自动选择 |
 | `DELI_MODE` | 无参数运行时使用 | `dry`、`auto`、`checkin` 或 `checkout` |
@@ -54,7 +54,7 @@ cp .env.example .env
 ```dotenv
 DELI_MOBILE='你的手机号'
 DELI_PASSWORD='你的原始登录密码'
-DELI_TRUST_CODE='你的 trust_code'
+DELI_TRUST_CODE=''
 DELI_TERMINAL_ID='你的设备标识'
 DELI_ORG_ID=''
 DELI_MODE='dry'
@@ -62,19 +62,35 @@ DELI_MODE='dry'
 
 系统环境变量和青龙环境变量的优先级高于 `.env`。单组织账号可将 `DELI_ORG_ID` 留空；多组织账号需填写目标组织 ID。`DELI_MODE` 首次建议使用 `dry`。
 
+首次运行建议执行：
+
+```bash
+python3 deli_eplus_auto_simple_v3.py login
+```
+
+如果 `.env` 中的 `DELI_TRUST_CODE` 为空，脚本会自动发送登录短信并提示输入验证码。验证成功后，服务端返回的 `trust_code` 会写回 `.env`，文件权限会设置为 `600`；以后运行将直接使用密码和已保存的 `trust_code`，不再要求验证码。
+
+非交互环境可先通过官方 App 获取验证码，再临时提供已经收到的验证码：
+
+```bash
+DELI_SMS_CODE='短信验证码' python3 deli_eplus_auto_simple_v3.py login
+```
+
+`DELI_SMS_CODE` 只用于当次验证，不会写入 `.env`。设置该变量时脚本不会再次发送短信。首次初始化更推荐在可交互终端中完成，再把生成的 `DELI_TRUST_CODE` 配置到青龙环境变量。青龙等非交互环境如果没有提供验证码，会在发送短信之前停止，避免定时任务反复发送验证码。
+
 `gps_name`、`lat`、`lgt`、`gps_location` 和 `gps_range` 默认留空时，会使用服务端返回的第一条 GPS 规则。如需自定义这些非敏感高级选项，可修改脚本顶部的 `CONFIG`。
 
 > `.env` 已被 `.gitignore` 排除。不要使用 `git add -f .env`，也不要把真实账号信息写回脚本或 `.env.example`。分享代码或抓包前，还应检查 HAR、日志和 Git 历史中是否残留 token、手机号、位置等敏感数据。若凭据曾被公开，应立即更换密码并撤销相关会话。
 
 ## 配置字段从哪里获取
 
-手机号和原始登录密码由用户自行填写；`trust_code`、`terminal_id` 以及多组织账号使用的 `org_id` 需要从本人账号的官方得力 E+ 客户端流量中确认。不要照搬他人的字段：这些值与账号、组织、设备或登录会话有关。
+手机号和原始登录密码由用户自行填写；`trust_code` 可由脚本在首次运行时通过短信验证自动获取。`terminal_id` 仍需从本人官方得力 E+ 客户端流量中确认，多组织账号的 `org_id` 也可以在登录后根据脚本列出的组织信息填写。不要照搬他人的字段：这些值与账号、组织、设备或登录会话有关。
 
 | 配置字段 | 获取位置 | JSON 路径 | 是否长期配置 |
 | --- | --- | --- | --- |
 | `mobile` | 本人的登录手机号 | 无需抓包 | 是 |
 | `password` | 本人的原始登录密码 | 无需抓包 | 是 |
-| `trust_code` | 可信设备登录请求体 | `trust_code` | 是，失效后需重新获取 |
+| `trust_code` | 首次短信登录响应或可信设备登录请求体 | `data.trust_code` | 可由脚本首次自动获取 |
 | `org_id` | 组织列表响应 | `data[].org_id` | 仅多组织账号需要 |
 | `terminal_id` | 官方 App 的打卡提交请求体 | `terminal_id` | 提交时需要 |
 | `phone_model` | 打卡提交请求体 | `phone_model` | 可选，脚本已有默认值 |
@@ -117,7 +133,7 @@ X-Service-Id: userauth
 }
 ```
 
-这里主要提取 `trust_code`。响应中的 `data.token` 和 `data.user_id` 会由脚本在每次登录时自动获取，不需要保存。
+脚本通常不再需要从这里手工提取 `trust_code`；该请求主要用于理解后续可信密码登录。响应中的 `data.token` 和 `data.user_id` 会由脚本在每次登录时自动获取，不需要保存。
 
 ### 2. 查询组织列表
 
@@ -242,7 +258,7 @@ Content-Type: application/json
 
 6. 完全关闭并重新打开得力 E+，使用本人账号正常登录，然后进入综合签到页面。
 7. 使用 URL 关键字依次筛选 `trusted/login`、`org/list`、`auth/login`、`checkin/support` 和 `checkin/execute`。
-8. 在请求详情的 JSON Body 中提取 `trust_code` 和 `terminal_id`；多组织账号再从 `org/list` 响应中确定 `org_id`。
+8. 在请求详情的 JSON Body 中提取 `terminal_id`；多组织账号再从 `org/list` 响应中确定 `org_id`。`trust_code` 默认由脚本通过短信验证自动获取。
 9. 配置完成后移除手机 Wi-Fi 代理，并根据需要删除或停用抓包 CA 证书。
 
 如果只能看到 CONNECT、请求失败或 App 提示网络异常，通常表示证书没有正确安装/信任，或当前客户端启用了证书绑定。Android 7 及以上版本的 App 也可能默认不信任用户安装的 CA。请优先使用抓包工具提供的官方设备教程和已授权测试设备，不要在不属于自己的设备或账号上绕过安全控制。
@@ -382,7 +398,7 @@ HAR、IPA、提取后的 JS、反编译输出和一次性验证脚本属于本�
 
 ### 登录或签名突然失效
 
-账号会话、`trust_code`、接口字段和签名规则都可能随客户端升级而变化。先检查账号能否在官方 App 正常使用，再通过本地抓包结果定位差异。请勿在日志或 issue 中公开完整 token、密码和 HAR。
+账号会话、`trust_code`、接口字段和签名规则都可能随客户端升级而变化。如果 `trust_code` 已失效，可将 `.env` 中的 `DELI_TRUST_CODE` 清空，再运行一次 `login` 重新完成短信验证。仍然失败时，先检查账号能否在官方 App 正常使用，再通过本地抓包结果定位差异。请勿在日志或 issue 中公开完整 token、密码和 HAR。
 
 ## 免责声明
 
