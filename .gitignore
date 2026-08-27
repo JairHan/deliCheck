@@ -16,6 +16,7 @@ ipa_inspect/
 extracted_js/
 demo.js
 .video_agent/
+.codex/
 
 # Local research notes and one-off experiments containing captured samples.
 ANALYSIS.md
