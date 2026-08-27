@@ -1,0 +1,28 @@
+.DS_Store
+.env
+.venv/
+__pycache__/
+*.py[cod]
+*.log
+
+# Captured traffic and client packages may contain credentials or personal data.
+*.har
+*.ipa
+*.apk
+
+# Local reverse-engineering outputs and extracted assets.
+apk_inspect/
+ipa_inspect/
+extracted_js/
+demo.js
+.video_agent/
+
+# Local research notes and one-off experiments containing captured samples.
+ANALYSIS.md
+DUMP_DEX.md
+GUIDE_ANDROID.md
+bruteforce_sig*.py
+frida_hook_sig.js
+salt_candidates.txt
+token_salts.txt
+test.py
