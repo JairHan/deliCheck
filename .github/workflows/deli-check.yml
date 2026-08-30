@@ -72,13 +72,13 @@ jobs:
       - name: Determine mode
         shell: bash
         run: |
+          # 如果是手动触发，使用输入的模式
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "DELI_MODE=${{ inputs.mode }}" >> "$GITHUB_ENV"
-
+          # 如果是定时任务，判断当前时间是签到还是签退
           elif [[ "${{ github.event.schedule }}" == "30 8 * * *" ]]; then
             echo "DELI_MODE=checkin" >> "$GITHUB_ENV"
-
-          else
+          elif [[ "${{ github.event.schedule }}" == "0 20 * * *" ]]; then
             echo "DELI_MODE=checkout" >> "$GITHUB_ENV"
           fi
 
