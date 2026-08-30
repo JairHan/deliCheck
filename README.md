@@ -4,6 +4,301 @@
 
 > 本项目仅供接口研究、个人学习和经授权的自动化使用。请遵守所在组织的考勤制度、得力 E+ 服务条款及当地法律法规。使用者需自行承担账号、数据与操作风险。
 
+## 🚀 快速开始
+
+本项目主要有两种使用方式：**本地运行**和 **GitHub Actions**。如果只是想尽快跑起来，优先阅读本节即可。
+
+- **本地运行**：适合首次初始化、短信验证、调试和手动执行。
+- **GitHub Actions**：适合把账号配置保存到 Repository Secrets 后，在 GitHub 上手动执行或启用定时任务。
+
+### 方式一：本地运行
+
+#### 1. 克隆项目并安装依赖
+
+```bash
+git clone https://github.com/JairHan/deliCheck.git
+cd deliCheck
+
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -r requirements.txt
+```
+
+#### 2. 创建本地配置
+
+```bash
+cp .env.example .env
+```
+
+编辑 `.env`，至少填写：
+
+```dotenv
+DELI_MOBILE='你的手机号'
+DELI_PASSWORD='你的原始登录密码'
+DELI_TRUST_CODE=''
+DELI_TERMINAL_ID=''
+DELI_ORG_ID=''
+DELI_MODE='dry'
+DELI_RANDOM_DELAY='0'
+```
+
+单组织账号可以不填写 `DELI_ORG_ID`。
+
+#### 3. 首次登录初始化
+
+```bash
+python3 deli_eplus_auto_simple_v3.py login
+```
+
+首次运行时，如果 `DELI_TRUST_CODE` 为空，脚本会通过短信验证码完成可信设备验证，并把获得的 `trust_code` 写入 `.env`。如果 `DELI_TERMINAL_ID` 为空，也会生成一个稳定 UUID 并保存，后续会持续复用。
+
+#### 4. 先进行 Dry-run
+
+```bash
+python3 deli_eplus_auto_simple_v3.py check
+```
+
+该命令只会检查登录状态、排班、当前动作、今日记录和 GPS 规则，**不会真实提交打卡**。
+
+确认无误后再执行：
+
+```bash
+# 按服务端当前动作提交
+python3 deli_eplus_auto_simple_v3.py check --execute
+
+# 仅允许签到
+python3 deli_eplus_auto_simple_v3.py check --expected checkin --execute
+
+# 仅允许签退
+python3 deli_eplus_auto_simple_v3.py check --expected checkout --execute
+```
+
+也可以直接通过环境变量运行：
+
+```bash
+DELI_MODE=dry python3 deli_eplus_auto_simple_v3.py
+DELI_MODE=checkin python3 deli_eplus_auto_simple_v3.py
+DELI_MODE=checkout python3 deli_eplus_auto_simple_v3.py
+DELI_MODE=auto python3 deli_eplus_auto_simple_v3.py
+```
+
+| `DELI_MODE` | 行为 |
+| --- | --- |
+| `dry` | 只检查，不提交 |
+| `checkin` | 仅当当前动作是签到时真实提交 |
+| `checkout` | 仅当当前动作是签退时真实提交 |
+| `auto` | 按服务端返回的当前动作真实提交 |
+
+> 推荐首次运行始终从 `dry` 开始，确认配置和排班正常后再启用真实提交。
+
+---
+
+### 方式二：GitHub Actions
+
+仓库已经包含：
+
+```text
+.github/workflows/deli-check.yml
+```
+
+可以直接使用 GitHub 托管 Runner 执行脚本。**当前仓库默认关闭 `schedule`，因此只支持手动运行，不会自动定时打卡。**
+
+如果你是其他用户，建议先 **Fork 本仓库到自己的 GitHub 账号**，然后在自己的仓库中配置 Secrets 和 Actions。
+
+#### 1. 先在本地完成一次初始化
+
+建议先按照上面的“本地运行”步骤执行：
+
+```bash
+python3 deli_eplus_auto_simple_v3.py login
+```
+
+获取并保存稳定的：
+
+```text
+DELI_TRUST_CODE
+DELI_TERMINAL_ID
+```
+
+GitHub Actions Runner 每次运行都是临时环境，因此不要依赖 Actions 运行过程中写入的 `.env` 持久保存这两个值。
+
+#### 2. 配置 Repository Secrets
+
+进入自己的仓库：
+
+```text
+Settings → Secrets and variables → Actions → Repository secrets
+```
+
+建议添加：
+
+| Secret | 是否必需 | 说明 |
+| --- | --- | --- |
+| `DELI_MOBILE` | 是 | 得力 E+ 登录手机号 |
+| `DELI_PASSWORD` | 是 | 原始登录密码 |
+| `DELI_TRUST_CODE` | 是 | 本地初始化后获得的可信设备代码 |
+| `DELI_TERMINAL_ID` | 是 | 稳定复用的设备标识 |
+| `DELI_ORG_ID` | 多组织账号需要 | 单组织账号可以不设置 |
+| `SMTP_EMAIL` | 可选 | QQ 邮箱通知发件地址 |
+| `SMTP_PASSWORD` | 可选 | QQ 邮箱 SMTP 授权码 |
+| `SMTP_TO` | 可选 | 通知接收地址 |
+
+Secret 的 Value **只填写实际值**，不要写变量名，也不要额外添加 `.env` 中的引号。例如：
+
+```text
+13800138000
+```
+
+不要写成：
+
+```text
+DELI_MOBILE='13800138000'
+```
+
+#### 3. 手动运行 GitHub Actions
+
+进入：
+
+```text
+Actions → Deli E+ 自动打卡 → Run workflow
+```
+
+选择运行模式：
+
+| 模式 | 行为 |
+| --- | --- |
+| `dry` | 只检查，不提交 |
+| `checkin` | 仅在服务端当前动作是签到时提交 |
+| `checkout` | 仅在服务端当前动作是签退时提交 |
+| `auto` | 按服务端当前动作提交 |
+
+第一次建议选择：
+
+```text
+dry
+```
+
+确认 Actions 日志中的账号、组织、排班和 GPS 校验全部正常后，再测试 `checkin` / `checkout`。
+
+#### 4. 启用自动定时运行
+
+当前 workflow 中的定时配置默认被注释：
+
+```yaml
+on:
+  # schedule:
+  #   - cron: '30 8 * * *'
+  #     timezone: 'Asia/Shanghai'
+  #
+  #   - cron: '0 20 * * *'
+  #     timezone: 'Asia/Shanghai'
+
+  workflow_dispatch:
+```
+
+因此默认**不会自动执行**。
+
+需要自动运行时取消注释，例如：
+
+```yaml
+on:
+  schedule:
+    # 每天北京时间 08:30 签到
+    - cron: '30 8 * * *'
+      timezone: 'Asia/Shanghai'
+
+    # 每天北京时间 20:00 签退
+    - cron: '0 20 * * *'
+      timezone: 'Asia/Shanghai'
+
+  workflow_dispatch:
+```
+
+仓库当前的模式判断逻辑为：
+
+```text
+每天 08:30 → DELI_MODE=checkin
+每天 20:00 → DELI_MODE=checkout
+手动运行   → 使用 Run workflow 页面选择的 mode
+```
+
+`* * *` 会让任务周一到周日每天触发。如果只想周一至周五：
+
+```yaml
+- cron: '30 8 * * 1-5'
+  timezone: 'Asia/Shanghai'
+
+- cron: '0 20 * * 1-5'
+  timezone: 'Asia/Shanghai'
+```
+
+不过脚本本身还会读取服务端的工作日和排班状态。如果所在组织存在周末补班或节假日调休，**每天触发，再由服务端排班判断是否执行**通常更符合实际情况。
+
+> GitHub Actions 的 scheduled workflow 不是实时调度器，任务可能因为平台负载出现一定延迟，不适合要求精确到秒的场景。
+
+#### 5. Workflow 环境变量与 Secret
+
+Repository Secret 不会仅因为名称相同就自动进入脚本，必须在 workflow 中显式引用：
+
+```yaml
+env:
+  DELI_MOBILE: ${{ secrets.DELI_MOBILE }}
+  DELI_PASSWORD: ${{ secrets.DELI_PASSWORD }}
+```
+
+如果 workflow 直接写：
+
+```yaml
+DELI_RANDOM_DELAY: '0'
+```
+
+那么最终脚本读取的就是 `0`。即使 Repository Secrets 中存在同名 `DELI_RANDOM_DELAY`，只要 workflow 没有引用 `${{ secrets.DELI_RANDOM_DELAY }}`，那个 Secret 就不会生效。
+
+本项目的配置优先级可以理解为：
+
+```text
+GitHub Actions env
+        ↓
+本地 .env
+        ↓
+Python CONFIG 默认值
+```
+
+当前 workflow 已直接设置：
+
+```yaml
+DELI_RANDOM_DELAY: '0'
+```
+
+因此不需要额外创建 `DELI_RANDOM_DELAY` Secret。
+
+`DELI_MODE` 也不需要创建 Repository Secret：手动执行由 `workflow_dispatch` 选择，定时执行由 cron 触发时间决定。
+
+#### 6. QQ 邮箱通知（可选）
+
+workflow 已预留：
+
+```yaml
+SMTP_SSL: 'true'
+SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
+SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+SMTP_TO: ${{ secrets.SMTP_TO }}
+SMTP_SERVER: 'smtp.qq.com:465'
+SMTP_NAME: 'GitHub Actions 得力打卡'
+```
+
+需要通知时，配置 `SMTP_EMAIL` 与 `SMTP_PASSWORD` 即可。`SMTP_PASSWORD` 必须使用 QQ 邮箱生成的 SMTP 授权码，而不是 QQ 登录密码。
+
+#### 7. GitHub Actions 安全注意事项
+
+- 不要把手机号、密码、`trust_code`、`terminal_id`、邮箱授权码直接写进 workflow。
+- 不要提交真实 `.env`。
+- 不要主动在 Actions 日志中打印完整 token、密码或 HAR。
+- 首次测试优先使用 `dry`。
+- 固定早晚任务推荐分别使用 `checkin` / `checkout`，避免 `auto` 在异常情况下补打另一种动作。
+
+---
+
 ## 当前能力
 
 - 首次通过短信验证码获取并保存 `trust_code`，后续使用手机号和密码登录
@@ -301,7 +596,7 @@ HAR 通常包含完整请求头、登录 token、手机号、设备标识、组�
 - 完成提取后可删除 HAR，或保存在加密目录中。
 - 如果 HAR 曾被公开，应更换密码、重新登录以刷新会话，并撤销仍有效的设备或 token。
 
-## 使用方法
+## 详细使用方法
 
 建议先依次执行只读命令，确认账号、排班和 GPS 规则均符合预期，再考虑提交。
 
@@ -365,190 +660,6 @@ DELI_MODE=dry python3 deli_eplus_auto_simple_v3.py
 ```
 
 确认运行结果后，再根据实际制度选择 `checkin`、`checkout` 或 `auto`。不建议在尚未验证排班和账号配置时直接启用自动提交。
-
-### GitHub Actions
-
-仓库已经包含工作流文件 `.github/workflows/deli-check.yml`，可以在 GitHub 托管的 Ubuntu Runner 上安装依赖并执行脚本。当前仓库中的 `schedule` 配置默认被注释，因此 **默认只支持手动触发，不会自动定时打卡**；确认账号和执行结果无误后，再按实际需要启用定时任务。
-
-#### 1. 配置 Repository secrets
-
-进入仓库：
-
-```text
-Settings → Secrets and variables → Actions → Repository secrets
-```
-
-建议添加以下 Secrets：
-
-| Secret | 是否必需 | 说明 |
-| --- | --- | --- |
-| `DELI_MOBILE` | 是 | 得力 E+ 登录手机号 |
-| `DELI_PASSWORD` | 是 | 原始登录密码 |
-| `DELI_TRUST_CODE` | 是（GitHub Actions 推荐预先配置） | 已完成短信验证后获得的可信设备代码 |
-| `DELI_TERMINAL_ID` | 是（GitHub Actions 推荐固定配置） | 稳定复用的设备标识 |
-| `DELI_ORG_ID` | 多组织账号需要 | 单组织账号可以不设置 |
-| `SMTP_EMAIL` | 可选 | QQ 邮箱通知的发件地址 |
-| `SMTP_PASSWORD` | 可选 | QQ 邮箱 SMTP 授权码，不是 QQ 登录密码 |
-| `SMTP_TO` | 可选 | 通知接收地址；留空时由脚本按 SMTP 配置处理 |
-
-Secret 的 Value 只填写实际值，不要填写 `KEY=`，也不要额外添加 `.env` 中为了书写方便使用的引号。例如手机号 Secret 应填写：
-
-```text
-13800138000
-```
-
-而不是：
-
-```text
-DELI_MOBILE='13800138000'
-```
-
-GitHub Actions Runner 是临时环境，每次任务结束后本次运行期间写入的 `.env` 不会作为下一次 Runner 的持久配置继续存在。因此建议先在自己的电脑上执行一次：
-
-```bash
-python3 deli_eplus_auto_simple_v3.py login
-```
-
-完成短信验证并生成稳定配置后，将 `.env` 中得到的 `DELI_TRUST_CODE` 和 `DELI_TERMINAL_ID` 分别保存到 Repository secrets。不要把真实 `.env` 提交到仓库。
-
-#### 2. 手动运行
-
-工作流包含 `workflow_dispatch`，进入：
-
-```text
-Actions → Deli E+ 自动打卡 → Run workflow
-```
-
-即可选择运行模式：
-
-| 模式 | 行为 |
-| --- | --- |
-| `dry` | 只进行登录、排班、当前动作、记录和 GPS 检查，不提交打卡 |
-| `checkin` | 仅在服务端当前动作是签到时真实提交 |
-| `checkout` | 仅在服务端当前动作是签退时真实提交 |
-| `auto` | 按服务端返回的当前动作真实提交 |
-
-首次在 GitHub Actions 中运行时，建议先选择 `dry`。确认日志中的账号、组织、排班和 GPS 校验均正常后，再测试真实提交模式。
-
-#### 3. 启用自动定时运行
-
-当前 `.github/workflows/deli-check.yml` 中的 `schedule` 被注释：
-
-```yaml
-on:
-  # schedule:
-  #   - cron: '30 8 * * *'
-  #     timezone: 'Asia/Shanghai'
-  #
-  #   - cron: '0 20 * * *'
-  #     timezone: 'Asia/Shanghai'
-
-  workflow_dispatch:
-```
-
-因此当前配置不会自动运行。若需要启用定时任务，取消对应注释即可，例如：
-
-```yaml
-on:
-  schedule:
-    # 每天北京时间 08:30
-    - cron: '30 8 * * *'
-      timezone: 'Asia/Shanghai'
-
-    # 每天北京时间 20:00
-    - cron: '0 20 * * *'
-      timezone: 'Asia/Shanghai'
-
-  workflow_dispatch:
-```
-
-配合仓库当前的 `Determine mode` 逻辑：
-
-```text
-每天 08:30 → DELI_MODE=checkin
-每天 20:00 → DELI_MODE=checkout
-手动运行   → 使用 Run workflow 页面选择的 mode
-```
-
-上面的 `* * *` 会让任务周一到周日每天运行。如果只希望周一至周五运行，可将最后一列改为 `1-5`：
-
-```yaml
-- cron: '30 8 * * 1-5'
-  timezone: 'Asia/Shanghai'
-
-- cron: '0 20 * * 1-5'
-  timezone: 'Asia/Shanghai'
-```
-
-不过脚本本身还会查询服务端的工作日和排班状态。如果所在组织存在周末补班、节假日调休等情况，按每天触发、再由服务端排班决定是否允许提交，通常比单纯限制为周一至周五更贴合实际排班。
-
-> GitHub Actions 的 scheduled workflow 不是实时调度器，任务可能因平台负载出现一定延迟，不适合要求精确到秒的执行场景。
-
-#### 4. 环境变量与 Secret 的优先级
-
-Repository Secret 不会仅因为名称相同就自动进入 Python 环境，必须在 workflow 中显式引用，例如：
-
-```yaml
-env:
-  DELI_MOBILE: ${{ secrets.DELI_MOBILE }}
-  DELI_PASSWORD: ${{ secrets.DELI_PASSWORD }}
-```
-
-如果 workflow 直接写死一个值：
-
-```yaml
-env:
-  DELI_RANDOM_DELAY: '0'
-```
-
-那么本次运行得到的就是 `DELI_RANDOM_DELAY=0`。即使 Repository secrets 中还存在一个同名 `DELI_RANDOM_DELAY`，只要 workflow 没有写 `${{ secrets.DELI_RANDOM_DELAY }}`，该 Secret 就不会参与本次运行。
-
-对于本项目，可以把配置优先级理解为：
-
-```text
-GitHub Actions env
-        ↓
-本地 .env
-        ↓
-Python CONFIG 默认值
-```
-
-脚本加载 `.env` 时不会覆盖已经存在的系统环境变量，随后环境变量又会覆盖代码中的 `CONFIG` 默认值。因此，GitHub Actions 显式传入的环境变量优先级最高。
-
-当前 workflow 将：
-
-```yaml
-DELI_RANDOM_DELAY: '0'
-```
-
-直接写入 job 环境，所以 GitHub Actions 执行时不会使用代码中的随机延迟默认值，也不需要再为 `DELI_RANDOM_DELAY` 建立 Repository Secret。
-
-`DELI_MODE` 同样不需要建立 Repository Secret：手动执行时由 `workflow_dispatch` 输入决定；启用定时任务后，则由触发的 cron 表达式决定 `checkin` 或 `checkout`。
-
-#### 5. QQ 邮箱通知
-
-工作流已经预留：
-
-```yaml
-SMTP_SSL: 'true'
-SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
-SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-SMTP_TO: ${{ secrets.SMTP_TO }}
-SMTP_SERVER: 'smtp.qq.com:465'
-SMTP_NAME: 'GitHub Actions 得力打卡'
-```
-
-需要邮件通知时，在 Repository secrets 中添加 `SMTP_EMAIL` 和 `SMTP_PASSWORD`；其中 `SMTP_PASSWORD` 必须填写 QQ 邮箱生成的 SMTP 授权码，而不是 QQ 登录密码。`SMTP_TO` 可按需配置。
-
-不需要邮件通知时可以不创建这些 SMTP Secrets，脚本会按未配置推送处理。
-
-#### 6. 安全注意事项
-
-- 不要把手机号、密码、`trust_code`、`terminal_id`、邮箱授权码直接写入 workflow 或 README。
-- 不要提交真实 `.env`；GitHub Actions 中的敏感值使用 Repository secrets。
-- Actions 日志虽然会对直接引用的 Secret 做掩码处理，但仍不要主动打印凭据、完整 token、HAR 或其他可用于恢复账号状态的信息。
-- 修改定时模式后，建议先手动执行一次 `dry`，再启用真实的 `checkin` / `checkout`。
-- `auto` 会按服务端当前动作提交；固定早晚任务使用 `checkin` 和 `checkout` 可以避免某一时段发生意外补打另一种动作。
 
 ## 工作流程
 
