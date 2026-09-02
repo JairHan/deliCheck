@@ -44,7 +44,7 @@ jobs:
       DELI_ORG_ID: ${{ secrets.DELI_ORG_ID }}
 
       # 固定时间执行时建议设为 0
-      DELI_RANDOM_DELAY: '3600'
+      DELI_RANDOM_DELAY: '0'
 
       # QQ 邮箱通知，可选
       SMTP_SSL: 'true'
