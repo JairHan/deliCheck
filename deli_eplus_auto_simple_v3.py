@@ -8,7 +8,7 @@
 4. 使用固定办公点做 GPS 范围自检
 5. 支持青龙环境变量和 DELI_MODE 自动运行
 6. 真正提交时，时间取脚本当前毫秒，sig 按得力 App 算法本地计算（双重 MD5）
-7. 支持启动时在设定的最小/最大秒数范围内随机延迟，避免每次都在固定时刻执行
+7. 支持启动时在设定秒数内随机延迟，避免每次都在固定时刻执行
 8. 支持通过 QQ 邮箱 SMTP 推送本次执行日志
 
 依赖：
@@ -124,8 +124,7 @@ CONFIG = {
     "phone_model": "iPhone18,1",  # 伪装机型，任意
     "user_agent": "smartoffice/3.5.5 (iPhone; iOS 27.0; Scale/3.00)",
     "timeout": 15,
-    "random_delay_min": 0,     # 启动后随机等待的最小秒数
-    "random_delay_max": 3600,  # 启动后随机等待的最大秒数；两者都为 0 表示不延迟
+    "random_delay": 3600,  # 启动后随机等待 0～该秒数；0 表示不延迟
     # 以下 5 项留空 = 自动从服务端 GPS 规则获取（规则已含 lat/lgt/name/location/range）
     "gps_name": "",  # 指定规则名；留空取第一条规则中心点
     "lat": "",  # 自定义坐标；留空用规则中心点（distance 0 必过）
@@ -146,8 +145,7 @@ ENV_MAP = {
     "DELI_TRUST_CODE": "trust_code",
     "DELI_ORG_ID": "org_id",
     "DELI_TERMINAL_ID": "terminal_id",
-    "DELI_RANDOM_DELAY_MIN": "random_delay_min",
-    "DELI_RANDOM_DELAY_MAX": "random_delay_max",
+    "DELI_RANDOM_DELAY": "random_delay",
 }
 
 for env_name, key in ENV_MAP.items():
@@ -294,37 +292,24 @@ def set_push_title(outcome, title):
         outcome["title"] = title
 
 
-def apply_random_delay(min_seconds, max_seconds):
-    """在 min_seconds～max_seconds（含）之间随机等待整数秒。"""
+def apply_random_delay(max_seconds):
+    """在 0～max_seconds（含）之间随机等待整数秒。"""
     try:
-        min_seconds = int(str(min_seconds).strip() or "0")
         max_seconds = int(str(max_seconds).strip() or "0")
     except (TypeError, ValueError) as exc:
-        raise DeliError(
-            "random_delay_min / DELI_RANDOM_DELAY_MIN 和 "
-            "random_delay_max / DELI_RANDOM_DELAY_MAX 必须是非负整数秒"
-        ) from exc
+        raise DeliError("random_delay / DELI_RANDOM_DELAY 必须是非负整数秒") from exc
 
-    if min_seconds < 0 or max_seconds < 0:
-        raise DeliError("随机延迟的最小值和最大值都不能小于 0")
-
-    if min_seconds > max_seconds:
-        raise DeliError("随机延迟的最小值不能大于最大值")
-
-    if min_seconds == 0 and max_seconds == 0:
+    if max_seconds < 0:
+        raise DeliError("random_delay / DELI_RANDOM_DELAY 不能小于 0")
+    if max_seconds == 0:
         return 0
 
-    delay_seconds = min_seconds + secrets.randbelow(max_seconds - min_seconds + 1)
-    print(
-        f"随机延迟      : {delay_seconds} 秒"
-        f"（配置范围 {min_seconds}～{max_seconds} 秒）"
-    )
+    delay_seconds = secrets.randbelow(max_seconds + 1)
+    print(f"随机延迟      : {delay_seconds} 秒（配置范围 0～{max_seconds} 秒）")
     expected_start = datetime.fromtimestamp(time.time() + delay_seconds)
     print("预计执行时间  :", expected_start.strftime("%Y-%m-%d %H:%M:%S"))
-
     if delay_seconds:
         time.sleep(delay_seconds)
-
     return delay_seconds
 
 
@@ -930,10 +915,7 @@ def run(mode, expected=None, execute=False, outcome=None):
     print("运行模式      :", mode)
     print("实际提交      :", "是" if execute else "否")
 
-    apply_random_delay(
-        CONFIG.get("random_delay_min", 0),
-        CONFIG.get("random_delay_max", 0),
-    )
+    apply_random_delay(CONFIG.get("random_delay", 0))
 
     print("\n正在登录主 App...")
     deli.login_main()
