@@ -7,7 +7,7 @@ on:
       timezone: 'Asia/Shanghai'
 
     # 示例：中国时间工作日 20:00 签退
-    - cron: '0 20 * * *'
+    - cron: '0 22 * * *'
       timezone: 'Asia/Shanghai'
 
   # 允许在 GitHub Actions 页面手动运行
@@ -44,7 +44,7 @@ jobs:
       DELI_ORG_ID: ${{ secrets.DELI_ORG_ID }}
 
       # 固定时间执行时建议设为 0
-      DELI_RANDOM_DELAY: '0'
+      DELI_RANDOM_DELAY: '1800'
 
       # QQ 邮箱通知，可选
       SMTP_SSL: 'true'
