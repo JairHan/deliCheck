@@ -3,7 +3,7 @@ name: Deli E+ 自动打卡
 on:
   schedule:
     # 示例：中国时间工作日 08:20 签到
-    - cron: '30 8 * * *'
+    - cron: '00 9 * * *'
       timezone: 'Asia/Shanghai'
 
     # 示例：中国时间工作日 20:00 签退
